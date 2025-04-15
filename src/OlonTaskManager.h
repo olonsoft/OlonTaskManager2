@@ -16,10 +16,10 @@ constexpr uint32_t HOURS = 60 * MINUTES;
 
 class Task {
  public:
-  typedef std::function<void(void* params)> TaskFunction;
-  typedef std::function<bool()> TaskRunIfFunction;
-  typedef std::function<void(const Task& me, const uint32_t elapsed)> TaskDoneCallbackFunction;
-  static const bool RunOnce = true;
+  using TaskFunction = std::function<void(void* params)>;
+  using TaskRunIfFunction = std::function<bool()>;
+  using TaskDoneCallbackFunction = std::function<void(const Task& me, const uint32_t elapsed)>;
+  static constexpr bool RunOnce = true;
 
   // Constructor
   Task(const char* name, TaskFunction fn)
@@ -35,37 +35,32 @@ class Task {
     setRunOnce(runOnce);
   }
 
-  // Destructor
-  ~Task() {}
+  // Make the task non-copyable but moveable
+  Task(const Task&) = delete;
+  Task& operator=(const Task&) = delete;
+  Task(Task&&) = default;
+  Task& operator=(Task&&) = default;
 
-  const char* getName() const { return _name; }
+  // Virtual destructor for proper cleanup
+  virtual ~Task() = default;
+
+  [[nodiscard]] const char* getName() const { return _name; }
+  [[nodiscard]] bool getRunOnce() const { return _runOnce; }
+  [[nodiscard]] bool isEnabled() const { return _enabled; }
+  [[nodiscard]] bool isPaused() const { return _paused; }
+  [[nodiscard]] bool isRunning() const { return _running; }
+  [[nodiscard]] void* getData() const { return _data; }
 
   void setRunOnce(bool runOnce) {
     _runOnce = runOnce;
     _paused = _runOnce;
   }
 
-  bool getRunOnce() const { return _runOnce; }
+  void setEnabled(bool enabled) { _enabled = enabled; }
 
-  void setEnabled(bool enabled) {
-    _enabled = enabled;
-    if (enabled && !_wasPending) {
-      _lastRun = millis();  // Reset last run time when task becomes enabled
-    }
-    _wasPending = enabled;
-  }
-
-  bool isCapable() const {
-    return !_taskRunIf || _taskRunIf();
-  }
-
-  bool isEnabled() const {
-    return _enabled;
-  }
+  bool isRunCapable() const { return !_taskRunIf || _taskRunIf(); }
 
   void pause() { _paused = true; }
-
-  bool isPaused() const { return _paused; }
 
   void resume(uint32_t delayMillis = 0) {
     _paused = false;
@@ -75,16 +70,8 @@ class Task {
     }
   }
 
-  bool isRunning() const { return _running; }
-
   void setRunIf(TaskRunIfFunction taskRunIf) {
-    _taskRunIf = taskRunIf;
-    // Check if enable state changed with new taskCanRun
-    bool pending = isPending();
-    if (pending && !_wasPending) {
-      _lastRun = millis();  // Reset last run time when task becomes enabled
-    }
-    _wasPending = pending;
+    _taskRunIf = std::move(taskRunIf);
   }
 
   void setInterval(uint32_t intervalMillis) {
@@ -94,23 +81,23 @@ class Task {
 
   void setImmediateInterval(uint32_t intervalMillis) {
     _intervalMillis = intervalMillis;
-	  _runImmediately = true;
+    _runImmediately = true;
   }
 
   void setDoneCallback(TaskDoneCallbackFunction doneCallback) {
-    _doneCallback = doneCallback;
+    _doneCallback = std::move(doneCallback);
   }
 
   void setData(void* params) { _data = params; }
 
-  void* getData() const { return _data; }
-
   bool tryRun() {
-    if (_paused || _running || !isPending()) {
+    if (_running || !isReadyToRun()) {
       return false;
     }
 
-  if (_runImmediately || _intervalMillis == 0 || millis() - _lastRun >= _intervalMillis) {
+    const uint32_t currentTime = safeMillis();
+    if (_runImmediately || _intervalMillis == 0 ||
+        timeDifference(currentTime, _lastRun) >= _intervalMillis) {
       _runImmediately = false;
       forceRun();
       return true;
@@ -119,7 +106,7 @@ class Task {
   }
 
   void forceRun() {
-    uint32_t start = millis();
+    uint32_t start = safeMillis();
     uint32_t start_us = micros();
     _running = true;
     _fn(_data);
@@ -140,17 +127,30 @@ class Task {
   void requestEarlyRun() { _lastRun = 0; }
 
  private:
-  bool isPending() const {
-    bool pending = isEnabled() && isCapable();
+  [[nodiscard]] bool isReadyToRun() const {
+    const bool readyToRun = isEnabled() && isRunCapable() && !isPaused();
 
-    // Update last run time when task transitions from disabled to enabled
-    if (pending && !_wasPending) {
-      _lastRun = millis();
-    }
-    _wasPending = pending;
+    //* Reset timing when transitioning to "ready"
+    // if (readyToRun && !_readyToRun) {
+    //   _lastRun = safeMillis();
+    // }
+    // _readyToRun = readyToRun;
 
-    return pending;
+    return readyToRun;
   }
+
+  // Handle millis() overflow safely
+  [[nodiscard]] static uint32_t safeMillis() { return millis(); }
+
+  // Safe time difference calculation accounting for overflow
+  [[nodiscard]] static uint32_t timeDifference(uint32_t current,
+                                               uint32_t previous) {
+    return (current >= previous) ? (current - previous)
+                                 : (UINT32_MAX - previous + current + 1);
+    //* this is the simpler version which gives also the correct result:
+    // return current - previous;
+  }
+
   const char* _name;
   TaskFunction _fn;
   bool _runOnce = false;
@@ -163,58 +163,75 @@ class Task {
   bool _paused = false;
   bool _running = false;
   bool _runImmediately = false;
-  mutable bool _wasPending = true;
+  mutable bool _readyToRun = false;
 };
 
 // ----------------
 
 class TaskManager {
  public:
-  explicit TaskManager(const char* name) : _name(name) {}
+  explicit TaskManager(const String name) : _name(std::move(name)) {}
 
-  // Destructor to clean up tasks
-  ~TaskManager() {
-    // you should not delete the tasks in the destructor. Instead, whoever adds
-    // the tasks should manage their lifetime for (auto& task : _tasks) {
-    //     delete task;
-    // }
-    _tasks.clear();
+  // you should not delete the tasks in the destructor. Instead, whoever adds
+  // the tasks should manage their lifetime for (auto& task : _tasks) {
+  //     delete task;
+
+  // Delete copy constructor and assignment
+  TaskManager(const TaskManager&) = delete;
+  TaskManager& operator=(const TaskManager&) = delete;
+
+  // Allow move operations
+  TaskManager(TaskManager&&) = default;
+  TaskManager& operator=(TaskManager&&) = default;
+
+  ~TaskManager() = default;
+
+  void addTask(Task* task) {
+    if (task && !containsTask(task)) {
+      _tasks.push_back(task);
+    }
   }
 
-  void addTask(Task* task) { _tasks.push_back(task); }
-
-  // Remove a specific task
   void removeTask(Task* task) {
     _tasks.erase(std::remove(_tasks.begin(), _tasks.end(), task), _tasks.end());
   }
 
-  const char* getName() const { return _name; }
+  [[nodiscard]] const String& getName() const { return _name; }
 
-  // Loop through tasks and execute if they are ready to run
+  [[nodiscard]] size_t getTaskCount() const { return _tasks.size(); }
+
   size_t loop() {
-    size_t executed = 0;
+    size_t taskRunCount = 0;
     for (auto& task : _tasks) {
-      if (task->tryRun()) {
-        executed++;
+      if (task && task->tryRun()) {
+        taskRunCount++;
       }
     }
-    return executed;
+    return taskRunCount;
   }
 
   void pause() {
     for (auto& task : _tasks) {
-      task->pause();
+      if (task) {
+        task->pause();
+      }
     }
   }
 
   void resume() {
     for (auto& task : _tasks) {
-      task->resume();
+      if (task) {
+        task->resume();
+      }
     }
   }
 
  private:
-  const char* _name;
+  [[nodiscard]] bool containsTask(const Task* task) const {
+    return std::find(_tasks.begin(), _tasks.end(), task) != _tasks.end();
+  }
+
+  String _name;
   std::vector<Task*> _tasks;
 };
 
