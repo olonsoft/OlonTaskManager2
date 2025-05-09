@@ -2,7 +2,8 @@
 #define TASK_MANAGER_H
 
 #include <Arduino.h>
-
+#include <string>
+#include <functional>
 #include <vector>
 
 namespace Olon {
@@ -26,10 +27,13 @@ class Task {
       : _name(name),
         _fn(fn),
         _runOnce(false),
+        _taskRunIf([]() { return true; }), // Default: always run
         _intervalMillis(0),
         _lastRun(0),
         _enabled(true),
-        _paused(false) {}
+        _paused(false),
+        _running(false),
+        _runImmediately(false) {}
 
   Task(const char* name, bool runOnce, TaskFunction fn) : Task(name, fn) {
     setRunOnce(runOnce);
@@ -128,15 +132,7 @@ class Task {
 
  private:
   [[nodiscard]] bool isReadyToRun() const {
-    const bool readyToRun = isEnabled() && isRunCapable() && !isPaused();
-
-    //* Reset timing when transitioning to "ready"
-    // if (readyToRun && !_readyToRun) {
-    //   _lastRun = safeMillis();
-    // }
-    // _readyToRun = readyToRun;
-
-    return readyToRun;
+    return isEnabled() && isRunCapable() && !isPaused();
   }
 
   // Handle millis() overflow safely
@@ -147,8 +143,6 @@ class Task {
                                                uint32_t previous) {
     return (current >= previous) ? (current - previous)
                                  : (UINT32_MAX - previous + current + 1);
-    //* this is the simpler version which gives also the correct result:
-    // return current - previous;
   }
 
   const char* _name;
@@ -163,14 +157,13 @@ class Task {
   bool _paused = false;
   bool _running = false;
   bool _runImmediately = false;
-  mutable bool _readyToRun = false;
 };
 
 // ----------------
 
 class TaskManager {
  public:
-  explicit TaskManager(const String name) : _name(std::move(name)) {}
+  explicit TaskManager(const std::string name) : _name(std::move(name)) {}
 
   // you should not delete the tasks in the destructor. Instead, whoever adds
   // the tasks should manage their lifetime for (auto& task : _tasks) {
@@ -186,6 +179,11 @@ class TaskManager {
 
   ~TaskManager() = default;
 
+  /**
+   * Adds a task to the manager. The task must remain valid for the lifetime of the TaskManager.
+   * @param task Pointer to the task to add. Must not be null.
+   * @note The TaskManager does not take ownership of the task.
+   */
   void addTask(Task* task) {
     if (task && !containsTask(task)) {
       _tasks.push_back(task);
@@ -196,7 +194,7 @@ class TaskManager {
     _tasks.erase(std::remove(_tasks.begin(), _tasks.end(), task), _tasks.end());
   }
 
-  [[nodiscard]] const String& getName() const { return _name; }
+  [[nodiscard]] const std::string& getName() const { return _name; }
 
   [[nodiscard]] size_t getTaskCount() const { return _tasks.size(); }
 
@@ -231,7 +229,7 @@ class TaskManager {
     return std::find(_tasks.begin(), _tasks.end(), task) != _tasks.end();
   }
 
-  String _name;
+  std::string _name;
   std::vector<Task*> _tasks;
 };
 
