@@ -9,25 +9,25 @@
 namespace Olon {
 
 namespace TaskDuration {
-constexpr uint32_t MILLISECONDS = 1U;
-constexpr uint32_t SECONDS = 1000U;
-constexpr uint32_t MINUTES = 60 * SECONDS;
-constexpr uint32_t HOURS = 60 * MINUTES;
+  constexpr uint32_t MILLISECONDS = 1U;
+  constexpr uint32_t SECONDS = 1000U;
+  constexpr uint32_t MINUTES = 60 * SECONDS;
+  constexpr uint32_t HOURS = 60 * MINUTES;
 }  // namespace TaskDuration
 
 class Task {
  public:
-  using TaskFunction = std::function<void(void* params)>;
-  using TaskRunIfFunction = std::function<bool()>;
-  using TaskDoneCallbackFunction = std::function<void(const Task& me, const uint32_t elapsed)>;
+  using TaskCallback = std::function<void(void* params)>;
+  using TaskRunIfCallback = std::function<bool()>;
+  using TaskDoneCallback = std::function<void(const Task& me, const uint32_t elapsed)>;
   static constexpr bool RunOnce = true;
 
   // Constructor
-  Task(const char* name, TaskFunction fn)
+  Task(const char* name, TaskCallback taskCallback)
       : _name(name),
-        _fn(fn),
+        _taskCallback(taskCallback),
         _runOnce(false),
-        _taskRunIf([]() { return true; }), // Default: always run
+        _taskRunIfCallback([]() { return true; }), // Default: always run
         _intervalMillis(0),
         _lastRun(0),
         _enabled(true),
@@ -35,7 +35,7 @@ class Task {
         _running(false),
         _runImmediately(false) {}
 
-  Task(const char* name, bool runOnce, TaskFunction fn) : Task(name, fn) {
+  Task(const char* name, bool runOnce, TaskCallback taskCallback) : Task(name, taskCallback) {
     setRunOnce(runOnce);
   }
 
@@ -62,7 +62,7 @@ class Task {
 
   void setEnabled(bool enabled) { _enabled = enabled; }
 
-  bool isRunCapable() const { return !_taskRunIf || _taskRunIf(); }
+  bool isRunCapable() const { return !_taskRunIfCallback || _taskRunIfCallback(); }
 
   void pause() { _paused = true; }
 
@@ -74,8 +74,8 @@ class Task {
     }
   }
 
-  void setRunIf(TaskRunIfFunction taskRunIf) {
-    _taskRunIf = std::move(taskRunIf);
+  void setRunIf(TaskRunIfCallback taskRunIfCallback) {
+    _taskRunIfCallback = std::move(taskRunIfCallback);
   }
 
   void setInterval(uint32_t intervalMillis) {
@@ -88,8 +88,8 @@ class Task {
     _runImmediately = true;
   }
 
-  void setDoneCallback(TaskDoneCallbackFunction doneCallback) {
-    _doneCallback = std::move(doneCallback);
+  void setDoneCallback(TaskDoneCallback doneCallback) {
+    _taskDoneCallback = std::move(doneCallback);
   }
 
   void setData(void* params) { _data = params; }
@@ -113,7 +113,7 @@ class Task {
     uint32_t start = safeMillis();
     uint32_t start_us = micros();
     _running = true;
-    _fn(_data);
+    _taskCallback(_data);
     _lastRun = start;
     _running = false;
 
@@ -123,8 +123,8 @@ class Task {
       _paused = true;
     }
 
-    if (_doneCallback) {
-      _doneCallback(*this, elapsed);
+    if (_taskDoneCallback) {
+      _taskDoneCallback(*this, elapsed);
     }
   }
 
@@ -146,10 +146,10 @@ class Task {
   }
 
   const char* _name;
-  TaskFunction _fn;
   bool _runOnce = false;
-  TaskRunIfFunction _taskRunIf = nullptr;
-  TaskDoneCallbackFunction _doneCallback = nullptr;
+  TaskCallback _taskCallback;
+  TaskRunIfCallback _taskRunIfCallback = nullptr;
+  TaskDoneCallback _taskDoneCallback = nullptr;
   void* _data = nullptr;
   uint32_t _intervalMillis;
   mutable uint32_t _lastRun;
