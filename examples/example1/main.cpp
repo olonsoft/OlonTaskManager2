@@ -37,7 +37,7 @@ Olon::Task ping("ping", Olon::Task::RunOnce, [](void* params) { Serial.printf("%
 Olon::Task output("output", [](void* params) { Serial.printf("%lu output\n", millis()); });
 Olon::Task delayed("delayed", Olon::Task::RunOnce, [](void* params) { Serial.printf("%lu Delayed!\n", millis()); });
 
-char* params = "Pong";
+// char* params = "Pong";
 
 void setup() {
   Serial.begin(115200);
@@ -48,15 +48,15 @@ void setup() {
   // sayHello.setRunOnce(false); // default
   sayHello.setInterval(1 * Olon::TaskDuration::SECONDS);
   sayHello.setDoneCallback([](const Olon::Task& me, const uint32_t elapsed) {
-    Serial.printf("Task '%s' executed in %" PRIu32 " us\n", me.getName(), elapsed);
+    Serial.printf("Task '%s' executed in %" PRIu32 " us\n", me.getName().data(), elapsed);
   });
   loopTaskManager.addTask(&sayHello);
 
   // sayGoodbye.setRunOnce(false); // default
   sayGoodbye.setInterval(3 * Olon::TaskDuration::SECONDS);
   sayGoodbye.setDoneCallback([](const Olon::Task& me, const uint32_t elapsed) {
-    Serial.printf("Task '%s' executed in %" PRIu32 " us\n", me.getName(), elapsed);
-    ping.setData(params);
+    Serial.printf("Task '%s' executed in %" PRIu32 " us\n", me.getName().data(), elapsed);
+    // ping.setData(params);
     ping.resume();
   });
   loopTaskManager.addTask(&sayGoodbye);
@@ -66,7 +66,7 @@ void setup() {
   // or auto start after 1500 ms
   // ping.setInterval(1500 * Olon::TaskDuration::MILLISECONDS);
   ping.setDoneCallback([](const Olon::Task& me, const uint32_t elapsed) {
-    Serial.printf("Task '%s' executed in %" PRIu32 " us\n", me.getName(), elapsed);
+    Serial.printf("Task '%s' executed in %" PRIu32 " us\n", me.getName().data(), elapsed);
   });
   loopTaskManager.addTask(&ping);
 

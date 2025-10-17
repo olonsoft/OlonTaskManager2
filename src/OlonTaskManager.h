@@ -5,6 +5,7 @@
 #include <string>
 #include <functional>
 #include <vector>
+#include <algorithm>
 
 namespace Olon {
 
@@ -20,28 +21,24 @@ class Task {
   using TaskCallback = std::function<void(void* params)>;
   using TaskRunIfCallback = std::function<bool()>;
   using TaskDoneCallback = std::function<void(const Task& me, const uint32_t elapsed)>;
+  // Default value for runOnce
   static constexpr bool RunOnce = true;
 
   // Constructor
-  Task(const char* name, TaskCallback taskCallback)
+  Task(const char* name, TaskCallback callback)
       : _name(name),
-        _taskCallback(taskCallback),
-        _runOnce(false),
-        _taskRunIfCallback([]() { return true; }), // Default: always run
-        _intervalMillis(0),
-        _lastRun(0),
-        _enabled(true),
-        _paused(false),
-        _running(false),
-        _runImmediately(false) {}
+        _taskCallback(std::move(callback)) {}
 
-  Task(const char* name, bool runOnce, TaskCallback taskCallback) : Task(name, taskCallback) {
+  Task(const char* name, bool runOnce, TaskCallback callback)
+      : Task(name, std::move(callback)) {
     setRunOnce(runOnce);
   }
 
-  // Make the task non-copyable but moveable
+  // Non-copyable
   Task(const Task&) = delete;
   Task& operator=(const Task&) = delete;
+
+  // Moveable
   Task(Task&&) = default;
   Task& operator=(Task&&) = default;
 
@@ -54,6 +51,9 @@ class Task {
   [[nodiscard]] bool isPaused() const { return _paused; }
   [[nodiscard]] bool isRunning() const { return _running; }
   [[nodiscard]] void* getData() const { return _data; }
+  [[nodiscard]] bool isReadyToRun() const {
+    return _enabled && !_paused && (!_taskRunIfCallback || _taskRunIfCallback());
+  }
 
   void setRunOnce(bool runOnce) {
     _runOnce = runOnce;
@@ -61,8 +61,6 @@ class Task {
   }
 
   void setEnabled(bool enabled) { _enabled = enabled; }
-
-  bool isRunCapable() const { return !_taskRunIfCallback || _taskRunIfCallback(); }
 
   void pause() { _paused = true; }
 
@@ -74,8 +72,8 @@ class Task {
     }
   }
 
-  void setRunIf(TaskRunIfCallback taskRunIfCallback) {
-    _taskRunIfCallback = std::move(taskRunIfCallback);
+  void setRunIf(TaskRunIfCallback condition) {
+    _taskRunIfCallback = std::move(condition);
   }
 
   void setInterval(uint32_t intervalMillis) {
@@ -88,20 +86,20 @@ class Task {
     _runImmediately = true;
   }
 
-  void setDoneCallback(TaskDoneCallback doneCallback) {
-    _taskDoneCallback = std::move(doneCallback);
+  void setDoneCallback(TaskDoneCallback callback) {
+    _taskDoneCallback = std::move(callback);
   }
 
   void setData(void* params) { _data = params; }
 
-  bool tryRun() {
-    if (_running || !isReadyToRun()) {
-      return false;
-    }
+  void requestEarlyRun() { _lastRun = 0; }
 
-    const uint32_t currentTime = safeMillis();
+  bool tryRun() {
+    if (_running || !isReadyToRun()) return false;
+
+    const uint32_t now = safeMillis();
     if (_runImmediately || _intervalMillis == 0 ||
-        timeDifference(currentTime, _lastRun) >= _intervalMillis) {
+        timeDifference(now, _lastRun) >= _intervalMillis) {
       _runImmediately = false;
       forceRun();
       return true;
@@ -119,22 +117,14 @@ class Task {
 
     uint32_t elapsed = micros() - start_us;
 
-    if (_runOnce) {
-      _paused = true;
-    }
+    if (_runOnce) _paused = true;
 
     if (_taskDoneCallback) {
       _taskDoneCallback(*this, elapsed);
     }
   }
 
-  void requestEarlyRun() { _lastRun = 0; }
-
  private:
-  [[nodiscard]] bool isReadyToRun() const {
-    return isEnabled() && isRunCapable() && !isPaused();
-  }
-
   // Handle millis() overflow safely
   [[nodiscard]] static uint32_t safeMillis() { return millis(); }
 
@@ -145,25 +135,30 @@ class Task {
                                  : (UINT32_MAX - previous + current + 1);
   }
 
+  // follow the constructots order to avoid warnings
   const char* _name;
-  bool _runOnce = false;
-  TaskCallback _taskCallback;
+  TaskCallback _taskCallback = nullptr;
   TaskRunIfCallback _taskRunIfCallback = nullptr;
   TaskDoneCallback _taskDoneCallback = nullptr;
+
   void* _data = nullptr;
-  uint32_t _intervalMillis;
-  mutable uint32_t _lastRun;
+
+  bool _runOnce = false;
   bool _enabled = true;
   bool _paused = false;
   bool _running = false;
   bool _runImmediately = false;
+
+  uint32_t _intervalMillis = 0;
+  mutable uint32_t _lastRun = 0;
+
 };
 
 // ----------------
 
 class TaskManager {
  public:
-  explicit TaskManager(const std::string name) : _name(std::move(name)) {}
+  explicit TaskManager(std::string name) : _name(std::move(name)) {}
 
   // you should not delete the tasks in the destructor. Instead, whoever adds
   // the tasks should manage their lifetime for (auto& task : _tasks) {
@@ -199,28 +194,22 @@ class TaskManager {
   [[nodiscard]] size_t getTaskCount() const { return _tasks.size(); }
 
   size_t loop() {
-    size_t taskRunCount = 0;
+    size_t count = 0;
     for (auto& task : _tasks) {
-      if (task && task->tryRun()) {
-        taskRunCount++;
-      }
+      if (task && task->tryRun()) count++;
     }
-    return taskRunCount;
+    return count;
   }
 
   void pause() {
     for (auto& task : _tasks) {
-      if (task) {
-        task->pause();
-      }
+      if (task) task->pause();
     }
   }
 
   void resume() {
     for (auto& task : _tasks) {
-      if (task) {
-        task->resume();
-      }
+      if (task) task->resume();
     }
   }
 
